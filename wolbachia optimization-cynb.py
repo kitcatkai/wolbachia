@@ -18,6 +18,7 @@ import json
 import requests
 import math
 import numpy as np
+from haversine import haversine
 
 with open('config.json') as f:
     settings = json.load(f)
@@ -157,6 +158,7 @@ import json
 import requests
 import math
 import numpy as np
+from haversine import haversine
 
 with open('config.json') as f:
     settings = json.load(f)
@@ -167,19 +169,20 @@ time_matrix = np.load('time_matrix.npy')
 dist_matrix = np.load('dist_matrix.npy')
 df = pd.read_pickle('block_with_geoloc.pickle')
 
-time_matrix[37, :] = 0
+time_matrix[37, :] = 0 #Setting going out time to zero
 
 time_matrix[:, 37]
 
-time_matrix[:, 37] = 0 # Setting return to base time to zero.
+# + {"active": ""}
+# time_matrix[:, 37] = 0 # Setting return to base time to zero.
+# -
 
 time_matrix.shape
 
-time_matrix[35:,35:]
-
-# Adding in the additional time for release
-for idx, value in df['NumRelease'].iteritems():
-    time_matrix[idx, :] += value*60
+# + {"active": ""}
+# # Adding in the additional time for release
+# for idx, value in df['NumRelease'].iteritems():
+#     time_matrix[idx, :] += value*60
 
 # +
 """Vehicles Routing Problem (VRP)."""
@@ -207,6 +210,42 @@ def print_solution(data, manager, routing, solution):
         print(plan_output)
         max_route_distance = max(route_distance, max_route_distance)
     print('Maximum of the route distances: {}m'.format(max_route_distance))
+    
+def print_readable_solution(data, manager, routing, solution):
+    """Prints solution on console."""
+    max_route_distance = 0
+    max_route_time = 0
+    for vehicle_id in range(data['num_vehicles']):
+        index = routing.Start(vehicle_id)
+        plan_output = 'Route for vehicle {}:\n'.format(vehicle_id)
+        route = []
+        while not routing.IsEnd(index):
+            route.append(manager.IndexToNode(index))
+            previous_index = index
+            index = solution.Value(routing.NextVar(index))
+        route.append(manager.IndexToNode(index))
+        pair_pts = list(zip(route[:-1], route[1:]))
+        walk_dist = 0
+        walk_time = 0
+        elucid_dist = 0
+        for num, (i, j) in enumerate(pair_pts[1:]): #Dropping the first point
+            if num == 0:
+                plan_output += "Blk {}".format(df.loc[i, "Block"])
+            plan_output += " -> Blk {}".format(df.loc[j, "Block"])
+            walk_dist += dist_matrix[i, j]
+            walk_time += time_matrix[i, j]
+            loc_i = df.loc[i, 'location'].split(',')
+            loc_j = df.loc[j, 'location'].split(',')
+            elucid_dist += haversine((float(loc_i[0]), float(loc_i[1])), (float(loc_j[0]), float(loc_j[1]))) * 1000
+        plan_output += "\n"
+        plan_output += 'Walking distance of the route: {}m\n'.format(walk_dist)
+        plan_output += 'Walking time of the route: {}mins\n'.format(walk_time/60)
+        plan_output += 'Euclidean distance of the route: {}m\n'.format(elucid_dist)
+        print(plan_output)
+        max_route_distance = max(elucid_dist, max_route_distance)
+        max_route_time = max(walk_time, max_route_time)
+    print('Maximum of the euclidean distances: {}m'.format(max_route_distance))
+    print('Maximum of the route duration: {}mins'.format(max_route_time/60))
 
 
 # -
@@ -219,7 +258,7 @@ def print_solution(data, manager, routing, solution):
 """Stores the data for the problem."""
 data = {}
 data['distance_matrix'] = time_matrix
-data['num_vehicles'] = 6
+data['num_vehicles'] = 5
 data['depot'] = 37
 
 # Create the routing index manager.
@@ -264,11 +303,12 @@ solution = routing.SolveWithParameters(search_parameters)
 
 # Print solution on console.
 if solution:
-    print_solution(data, manager, routing, solution)
+    print_readable_solution(data, manager, routing, solution)
+#     print_solution(data, manager, routing, solution)
 # -
 
 import folium
-color = ["red", "blue", "green", "yellow", "black", "grey"]
+color = ['red', 'blue', 'green', 'purple', 'orange', 'darkred','lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white', 'pink', 'lightblue']
 mapa = folium.Map([1.3,103.9],
                   zoom_start=4,
                   tiles='cartodbpositron')
@@ -284,7 +324,8 @@ for vehicle_id in range(data['num_vehicles']):
         index = solution.Value(routing.NextVar(index))
         tmp = df.loc[manager.IndexToNode(index), 'location'].split(',')
         loc.append((float(tmp[0]), float(tmp[1])))
-    folium.PolyLine(loc, color=color[vehicle_id], weight=2.5, opacity=1).add_to(mapa)
+    folium.Marker(loc[1], popup=str(index)).add_to(mapa)
+    folium.PolyLine(loc[1:], color=color[vehicle_id], weight=2.5, opacity=1).add_to(mapa)
 mapa
 
 # # Arbitrary start and end point 
