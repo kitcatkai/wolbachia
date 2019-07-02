@@ -169,6 +169,13 @@ time_matrix = np.load('time_matrix.npy')
 dist_matrix = np.load('dist_matrix.npy')
 df = pd.read_pickle('block_with_geoloc.pickle')
 
+time_matrix_10min = time_matrix + 600
+time_matrix_5min = time_matrix + 300
+time_matrix_8min = time_matrix + 480
+time_matrix_5min[37, :] = 0 #Setting going out time to zero
+time_matrix_10min[37, :] = 0 #Setting going out time to zero
+time_matrix_10min[37, :] = 0 #Setting going out time to zero
+
 time_matrix[37, :] = 0 #Setting going out time to zero
 
 time_matrix[:, 37]
@@ -211,7 +218,7 @@ def print_solution(data, manager, routing, solution):
         max_route_distance = max(route_distance, max_route_distance)
     print('Maximum of the route distances: {}m'.format(max_route_distance))
     
-def print_readable_solution(data, manager, routing, solution):
+def print_readable_solution(data, manager, routing, solution, time_matrix=time_matrix, df=df, dist_matrix=dist_matrix):
     """Prints solution on console."""
     max_route_distance = 0
     max_route_time = 0
@@ -241,24 +248,149 @@ def print_readable_solution(data, manager, routing, solution):
         plan_output += 'Walking distance of the route: {}m\n'.format(walk_dist)
         plan_output += 'Walking time of the route: {}mins\n'.format(walk_time/60)
         plan_output += 'Euclidean distance of the route: {}m\n'.format(elucid_dist)
+        plan_output += 'Numbers of block: {}'.format(len(route[1:]))
         print(plan_output)
         max_route_distance = max(elucid_dist, max_route_distance)
         max_route_time = max(walk_time, max_route_time)
     print('Maximum of the euclidean distances: {}m'.format(max_route_distance))
     print('Maximum of the route duration: {}mins'.format(max_route_time/60))
+    
+def get_max_route(data, manager, routing, solution, time_matrix=time_matrix, df=df, dist_matrix=dist_matrix):
+    """Prints solution on console."""
+    max_route_distance = 0
+    max_route_time = 0
+    for vehicle_id in range(data['num_vehicles']):
+        index = routing.Start(vehicle_id)
+        plan_output = 'Route for vehicle {}:\n'.format(vehicle_id)
+        route = []
+        while not routing.IsEnd(index):
+            route.append(manager.IndexToNode(index))
+            previous_index = index
+            index = solution.Value(routing.NextVar(index))
+        route.append(manager.IndexToNode(index))
+        pair_pts = list(zip(route[:-1], route[1:]))
+        walk_dist = 0
+        walk_time = 0
+        elucid_dist = 0
+        for num, (i, j) in enumerate(pair_pts[1:]): #Dropping the first point
+            if num == 0:
+                plan_output += "Blk {}".format(df.loc[i, "Block"])
+            plan_output += " -> Blk {}".format(df.loc[j, "Block"])
+            walk_dist += dist_matrix[i, j]
+            walk_time += time_matrix[i, j]
+            loc_i = df.loc[i, 'location'].split(',')
+            loc_j = df.loc[j, 'location'].split(',')
+            elucid_dist += haversine((float(loc_i[0]), float(loc_i[1])), (float(loc_j[0]), float(loc_j[1]))) * 1000
+        plan_output += "\n"
+        plan_output += 'Walking distance of the route: {}m\n'.format(walk_dist)
+        plan_output += 'Walking time of the route: {}mins\n'.format(walk_time/60)
+        plan_output += 'Euclidean distance of the route: {}m\n'.format(elucid_dist)
+        plan_output += 'Numbers of block: {}\n'.format(len(route[1:]))
+        if walk_time > max_route_time:
+            plan_output_max = plan_output
+            max_route = route[1:-1]
+            max_route_distance = max(elucid_dist, max_route_distance)
+            max_route_time = max(walk_time, max_route_time)
+    print(plan_output_max)
+    return max_route
 
 
 # -
 
 # # Plotting the routes 
 
+current_time_matrix = time_matrix_10min
+
 # +
 """Solve the CVRP problem."""
 # Instantiate the data problem.
 """Stores the data for the problem."""
 data = {}
-data['distance_matrix'] = time_matrix
-data['num_vehicles'] = 5
+data['distance_matrix'] = current_time_matrix
+data['num_vehicles'] = 6
+data['depot'] = 37
+
+# Create the routing index manager.
+manager = pywrapcp.RoutingIndexManager(
+    len(data['distance_matrix']), data['num_vehicles'], data['depot'])
+
+# Create Routing Model.
+routing = pywrapcp.RoutingModel(manager)
+
+
+# Create and register a transit callback.
+def distance_callback(from_index, to_index):
+    """Returns the distance between the two nodes."""
+    # Convert from routing variable Index to distance matrix NodeIndex.
+    from_node = manager.IndexToNode(from_index)
+    to_node = manager.IndexToNode(to_index)
+    return data['distance_matrix'][from_node][to_node]
+
+transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+
+# Define cost of each arc.
+routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+# Add Distance constraint.
+dimension_name = 'Distance'
+routing.AddDimension(
+    transit_callback_index,
+    0,  # no slack
+    100000,  # vehicle maximum travel distance
+    True,  # start cumul to zero
+    dimension_name)
+distance_dimension = routing.GetDimensionOrDie(dimension_name)
+distance_dimension.SetGlobalSpanCostCoefficient(100)
+
+# Setting first solution heuristic.
+# search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+# search_parameters.first_solution_strategy = (
+#     routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+search_parameters.local_search_metaheuristic = (
+    routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+search_parameters.time_limit.seconds = 30
+search_parameters.log_search = True
+
+# Solve the problem.
+solution = routing.SolveWithParameters(search_parameters)
+
+# Print solution on console.
+if solution:
+    print_readable_solution(data, manager, routing, solution, time_matrix=current_time_matrix)
+#     print_solution(data, manager, routing, solution)
+# -
+
+import folium
+color = ['red', 'blue', 'green', 'purple', 'orange', 'darkred','lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white', 'pink', 'lightblue']
+mapa = folium.Map([1.3,103.9],
+                  zoom_start=4,
+                  tiles='cartodbpositron')
+for vehicle_id in range(data['num_vehicles']):
+    loc = []
+    index = routing.Start(vehicle_id)
+    print('\nRoute for vehicle {}:'.format(vehicle_id))
+    route_distance = 0
+    tmp = df.loc[manager.IndexToNode(index), 'location'].split(',')
+    loc.append((float(tmp[0]), float(tmp[1])))
+    while not routing.IsEnd(index):
+        previous_index = index
+        index = solution.Value(routing.NextVar(index))
+        tmp = df.loc[manager.IndexToNode(index), 'location'].split(',')
+        loc.append((float(tmp[0]), float(tmp[1])))
+    folium.Marker(loc[1], popup=str(index)).add_to(mapa)
+    folium.PolyLine(loc[1:], color=color[vehicle_id], weight=2.5, opacity=1).add_to(mapa)
+mapa
+
+current_time_matrix = time_matrix_5min
+
+# +
+"""Solve the CVRP problem."""
+# Instantiate the data problem.
+"""Stores the data for the problem."""
+data = {}
+data['distance_matrix'] = current_time_matrix
+data['num_vehicles'] = 6
 data['depot'] = 37
 
 # Create the routing index manager.
@@ -303,7 +435,7 @@ solution = routing.SolveWithParameters(search_parameters)
 
 # Print solution on console.
 if solution:
-    print_readable_solution(data, manager, routing, solution)
+    print_readable_solution(data, manager, routing, solution, time_matrix=current_time_matrix)
 #     print_solution(data, manager, routing, solution)
 # -
 
@@ -331,7 +463,7 @@ mapa
 # # Arbitrary start and end point 
 
 new_time_matrix = np.zeros((85, 85))
-new_time_matrix[:84,:84] = time_matrix
+new_time_matrix[:84,:84] = time_matrix_10min
 
 # +
 """Solve the CVRP problem."""
@@ -408,6 +540,115 @@ for vehicle_id in range(data['num_vehicles']):
         else:
             print(manager.IndexToNode(index))
     folium.PolyLine(loc, color=color[vehicle_id], weight=2.5, opacity=1).add_to(mapa)
+mapa
+
+
+
+# # Looping to minimise distance travelled for all
+
+current_time_matrix = time_matrix_10min
+
+# +
+"""Solve the CVRP problem."""
+# Instantiate the data problem.
+"""Stores the data for the problem."""
+data = {}
+data['distance_matrix'] = current_time_matrix
+data['num_vehicles'] = 6
+data['depot'] = 37
+df_tmp = df.copy()
+
+while data['num_vehicles'] > 2:
+    # Create the routing index manager.
+    manager = pywrapcp.RoutingIndexManager(
+        len(data['distance_matrix']), data['num_vehicles'], data['depot'])
+
+    # Create Routing Model.
+    routing = pywrapcp.RoutingModel(manager)
+
+
+    # Create and register a transit callback.
+    def distance_callback(from_index, to_index):
+        """Returns the distance between the two nodes."""
+        # Convert from routing variable Index to distance matrix NodeIndex.
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return data['distance_matrix'][from_node][to_node]
+
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+
+    # Define cost of each arc.
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    # Add Distance constraint.
+    dimension_name = 'Distance'
+    routing.AddDimension(
+        transit_callback_index,
+        0,  # no slack
+        100000,  # vehicle maximum travel distance
+        True,  # start cumul to zero
+        dimension_name)
+    distance_dimension = routing.GetDimensionOrDie(dimension_name)
+    distance_dimension.SetGlobalSpanCostCoefficient(100)
+
+    # Setting first solution heuristic.
+#     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+#     search_parameters.first_solution_strategy = (
+#         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+    search_parameters.time_limit.seconds = 30
+    search_parameters.log_search = True
+
+    # Solve the problem.
+    solution = routing.SolveWithParameters(search_parameters)
+
+    # Print solution on console.
+    if solution:
+        max_route = get_max_route(data, manager, routing, solution, time_matrix=current_time_matrix, df=df_tmp)
+        print("SOLUTIONS")
+        print_readable_solution(data, manager, routing, solution, time_matrix=current_time_matrix, df=df_tmp)
+        df_tmp = df_tmp.drop(max_route)
+        df_tmp = df_tmp.reset_index(drop=True)
+        current_time_matrix = np.delete(current_time_matrix, max_route, 0)
+        current_time_matrix = np.delete(current_time_matrix, max_route, 1)
+        data['distance_matrix'] = current_time_matrix
+        data['num_vehicles'] = data['num_vehicles'] - 1
+        data['depot'] = data['depot'] - sum([(i <data['depot']) for i in max_route ] )
+    else:
+        break
+# -
+
+df[10:]
+
+time_matrix_10min[69,34]
+
+current_time_matrix[26,19]
+
+df_tmp
+
+max_route
+
+import folium
+color = ['red', 'blue', 'green', 'purple', 'orange', 'darkred','lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 'darkpurple', 'white', 'pink', 'lightblue']
+mapa = folium.Map([1.3,103.9],
+                  zoom_start=4,
+                  tiles='cartodbpositron')
+for vehicle_id in range(data['num_vehicles']):
+    loc = []
+    index = routing.Start(vehicle_id)
+    print('\nRoute for vehicle {}:'.format(vehicle_id))
+    route_distance = 0
+    tmp = df.loc[manager.IndexToNode(index), 'location'].split(',')
+    loc.append((float(tmp[0]), float(tmp[1])))
+    while not routing.IsEnd(index):
+        previous_index = index
+        index = solution.Value(routing.NextVar(index))
+        tmp = df.loc[manager.IndexToNode(index), 'location'].split(',')
+        loc.append((float(tmp[0]), float(tmp[1])))
+    folium.Marker(loc[1], popup=str(index)).add_to(mapa)
+    folium.PolyLine(loc[1:], color=color[vehicle_id], weight=2.5, opacity=1).add_to(mapa)
 mapa
 
 
