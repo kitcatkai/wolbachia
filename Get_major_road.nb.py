@@ -59,13 +59,13 @@ road = (
     sg_roads.buffer(0).unary_union.buffer(3).buffer(-3)
 )  # Some of the polygons will not be join together without buffering
 tmp = gpd.GeoSeries([road], crs={"init": "epsg:3414"})
-tmp.to_file("road.json", driver="GeoJSON")
+tmp.to_file("data/road.json", driver="GeoJSON")
 
 # %% [markdown]
 # ## Reading in the road
 
 # %%
-road = gpd.read_file("road.json")
+road = gpd.read_file("data/road.json")
 
 # %% [markdown]
 # ## Testing the number of roads crossed
