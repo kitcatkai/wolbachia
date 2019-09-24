@@ -1,1 +1,4 @@
 .DS_Store
+.vscode/
+config.json
+.ipynb_checkpoints/

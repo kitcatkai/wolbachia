@@ -1,0 +1,27 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+black = "*"
+isort = "*"
+pylint = "*"
+rope = "*"
+
+[packages]
+jupyterlab = "*"
+folium = "*"
+ortools = "*"
+pandas = "*"
+geopandas = "*"
+haversine = "*"
+jupytext = "*"
+rtree = "*"
+xlrd = "*"
+
+[requires]
+python_version = "3.7"
+
+[pipenv]
+allow_prereleases = true
