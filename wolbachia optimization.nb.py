@@ -12,127 +12,6 @@
 #     name: python3
 # ---
 
-# %%
-import pandas as pd
-import json
-import requests
-import math
-import numpy as np
-from haversine import haversine
-
-with open("config.json") as f:
-    settings = json.load(f)
-
-# %% [markdown]
-# # Getting the distance and time Matrix
-# Should only be run once and the output is saved to reduce call to Google api.
-
-# %%
-# Reading in the release data
-release_pts = pd.read_excel("Yishun Wolbachia Release Points.xlsx")
-release_pts["NumRelease"] = release_pts["ReleaseLocation"].str.split(",").apply(len)
-release_pts["Block"] = release_pts["Block"].astype("str")
-release_pts["Block"] = release_pts["Block"].str.replace(".Bin Centre", "")
-display(release_pts)
-
-
-# %%
-def count_release(df_input):
-    """ Getting the number of release points at each block
-    """
-    output = {"Road": df_input.iloc[0, 0], "NumRelease": df_input["NumRelease"].sum()}
-    return pd.Series(output)
-
-
-# %%
-df = release_pts.groupby("Block").apply(count_release).reset_index()
-df["address"] = df["Block"] + "+" + df["Road"].str.replace(" ", "+")
-df["location"] = None
-display(df)
-
-# %%
-url = "https://maps.googleapis.com/maps/api/geocode/json"
-
-for each in range(num_blonum_blocks):
-    if not df.loc[each, "location"]:
-        params = dict(address=df.loc[each, "address"], key=settings["api_key"])
-        resp = requests.get(url=url, params=params)
-        data = resp.json()
-        try:
-            df.loc[each, "location"] = (
-                str(data["results"][0]["geometry"]["location"]["lat"])
-                + ","
-                + str(data["results"][0]["geometry"]["location"]["lng"])
-            )
-        except:
-            print(each)
-            print(data)
-
-df.to_pickle("block_with_geoloc.pickle")
-
-# %%
-# splitting the addresses into multiple string due to api limit
-
-arr = ""
-arr_total = []
-count = 0
-for index, row in df.iterrows():
-    count += 1
-    arr += str(row["address"]) + "|"
-    if count >= 25:
-        arr_total.append(arr)
-        count = 0
-        arr = ""
-if count != 0:
-    arr_total.append(arr)
-arr_total
-
-# %%
-# WILL RUN FOR 2 MINS AT MAX
-
-num_blocks = len(df)
-time_matrix = np.zeros((num_blocks, num_blocks))
-time_array = []
-dist_matrix = np.zeros((num_blocks, num_blocks))
-dist_array = []
-
-url_google_route = "https://maps.googleapis.com/maps/api/distancematrix/json"
-
-
-for each_index in range(len(df)):
-    time_array = []
-    dist_array = []
-    print("Inititaing " + str(each_index) + "/83 first...")
-    for index, dest_input in enumerate(arr_total):
-        params = dict(
-            destinations=dest_input,
-            origins=df.iloc[each_index]["address"],
-            key=settings["api_key"],
-            mode="walking",
-        )
-        resp = requests.get(url=url_google_route, params=params)
-        data = resp.json()
-        for each in range(len(data["rows"][0]["elements"])):
-            if data["rows"][0]["elements"][each]["status"] == "OK":
-                time_array.append(
-                    data["rows"][0]["elements"][each]["duration"]["value"]
-                )
-                dist_array.append(
-                    data["rows"][0]["elements"][each]["distance"]["value"]
-                )
-            else:
-                print(each)
-                print("Origin: {}, Destination: ".format(data["origin_addresses"][0]))
-                print(data)
-    print(each_index)
-    time_matrix[each_index] = time_array
-    dist_matrix[each_index] = dist_array
-
-
-# %%
-np.save("time_matrix.npy", time_matrix)
-np.save("dist_matrix.npy", dist_matrix)
-
 # %% [markdown]
 # # Loading the processed data
 
@@ -145,9 +24,9 @@ import numpy as np
 from haversine import haversine
 
 # %%
-time_matrix = np.load("time_matrix.npy")
-dist_matrix = np.load("dist_matrix.npy")
-df = pd.read_pickle("block_with_geoloc.pickle")
+time_matrix = np.load("data/time_matrix.npy")
+dist_matrix = np.load("data/dist_matrix.npy")
+df = pd.read_pickle("data/block_with_geoloc.pickle")
 num_blocks = len(df)
 
 # %%
@@ -156,7 +35,8 @@ df["Lon"] = df["location"].str.split(",").apply(lambda x: float(x[1]))
 latlong = list(zip(df["Lon"], df["Lat"]))
 
 # %% [markdown]
-# Getting the euclidean distance
+# # Getting the euclidean distance
+# Will be using this instead of the walking distance as the walking distance is not accurate.
 
 # %%
 euclidean_dist = np.zeros((num_blocks, num_blocks))
@@ -186,7 +66,7 @@ first_point = gpd.GeoSeries([Point(latlong[0])], crs={"init": "epsg:4326"}) \
 area_of_interest = first_point.geometry[0].buffer(1000)  # Buffering the point by 1km
 
 # loading the road network
-sg_road = gpd.read_file("road.json")
+sg_road = gpd.read_file("data/road.json")
 
 # %% [markdown]
 # ## Method 1:
@@ -298,7 +178,7 @@ for idx, cluster in enumerate(house_to_cluster):
 
 # %%
 # Viewing the regions
-mapa = folium.Map([1.3, 103.9], zoom_start=10, tiles="cartodbpositron")
+mapa = folium.Map([1.43296,103.8386047], zoom_start=16, tiles="cartodbpositron")
 mp_road = folium.FeatureGroup(name="mp road")
 mp_road.add_child(
     folium.GeoJson(
@@ -309,10 +189,10 @@ mapa.add_child(mp_road)
 display(mapa)
 
 # %% [markdown]
-# dist_matrix[2]
-
-# %% [markdown]
 # ## Generating the time/distance matrix
+# Adding in penalty for road crossing. 
+#
+# In the future can modify the release_penalty as well
 
 # %%
 # Time penalty for road crossing
@@ -352,12 +232,6 @@ time_matrix_8min = (
 time_matrix_5min[37, :] = 0  # Setting going out time to zero
 time_matrix_10min[37, :] = 0  # Setting going out time to zero
 time_matrix_10min[37, :] = 0  # Setting going out time to zero
-
-# %% [markdown]
-# time_matrix[:, 37]
-
-# %% [raw]
-# time_matrix[:, 37] = 0 # Setting return to base time to zero.
 
 # %%
 """Vehicles Routing Problem (VRP)."""
@@ -422,6 +296,9 @@ def print_solution(full_route):
 
 # %% [markdown]
 # # Plotting the routes
+
+# %% [markdown]
+# For 5min in each building
 
 # %%
 current_time_matrix = time_matrix_5min
@@ -536,7 +413,7 @@ color = [
 
 # %%
 def set_up_map(data, df, routing, manager, color=color):
-    mapa = folium.Map([1.3, 103.9], zoom_start=13, tiles="cartodbpositron")
+    mapa = folium.Map([1.43296,103.8386047], zoom_start=16, tiles="cartodbpositron")
     for vehicle_id in range(data["num_vehicles"]):
         loc = []
         index = routing.Start(vehicle_id)
@@ -562,7 +439,7 @@ mapa = set_up_map(data, df, routing, manager)
 mapa
 
 # %% [markdown]
-# Sovling it for 5 min interval
+# Sovling it for 10 min interval
 
 # %%
 current_time_matrix = time_matrix_10min
@@ -652,6 +529,10 @@ display(mapa)
 
 # %% [markdown]
 # # Looping to minimise distance travelled for all
+#
+# Current method only optimise the longest travelling time and not of the others, so looping to minimise the distance should give better results. 
+#
+# *Unfortunately this is not the case.*
 
 # %%
 current_time_matrix = time_matrix_10min
