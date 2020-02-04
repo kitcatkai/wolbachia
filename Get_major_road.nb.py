@@ -35,6 +35,28 @@ waterbody = waterbody.to_crs(epsg=3414)
 waterbody = waterbody.loc[:, ["OBJECTID", "geometry"]]
 
 # %% [markdown]
+# ## Joining the waterbody into a Multipolygon and saving in local coordinate!
+
+# %%
+# doing a buffer of 3 first is super slow... doing it after merging is faster
+water = (
+    waterbody.buffer(0).unary_union.buffer(3).buffer(-3)
+)  # Some of the polygons will not be join together without buffering
+tmp = gpd.GeoSeries([water], crs={"init": "epsg:3414"})
+tmp.to_file("data/waterbody.json", driver="GeoJSON")
+
+# %% [markdown]
+# ## Joining the road into a Multipolygon and saving in local coordinate!
+
+# %%
+# doing a buffer of 3 first is super slow... doing it after merging is faster
+road = (
+    sg_roads.buffer(0).unary_union.buffer(3).buffer(-3)
+)  # Some of the polygons will not be join together without buffering
+tmp = gpd.GeoSeries([road], crs={"init": "epsg:3414"})
+tmp.to_file("data/road.json", driver="GeoJSON")
+
+# %% [markdown]
 # Visualising a subset of it!
 
 # %%
@@ -49,17 +71,6 @@ mp_road = folium.FeatureGroup(name="mp road")
 mp_road.add_child(folium.GeoJson(sg_roads_geojson))
 mapa.add_child(mp_road)
 mapa
-
-# %% [markdown]
-# ## Joining the road into a Multipolygon and saving!
-
-# %%
-# doing a buffer of 3 first is super slow... doing it after merging is faster
-road = (
-    sg_roads.buffer(0).unary_union.buffer(3).buffer(-3)
-)  # Some of the polygons will not be join together without buffering
-tmp = gpd.GeoSeries([road], crs={"init": "epsg:3414"})
-tmp.to_file("data/road.json", driver="GeoJSON")
 
 # %% [markdown]
 # ## Reading in the road

@@ -22,17 +22,28 @@ import requests
 import math
 import numpy as np
 from haversine import haversine
+import geopandas as gpd
+import numpy as np
+from shapely.geometry import LineString, Point, MultiPoint
+from shapely.ops import nearest_points
+import folium
 
 # %%
-time_matrix = np.load("data/time_matrix.npy")
-dist_matrix = np.load("data/dist_matrix.npy")
-df = pd.read_pickle("data/block_with_geoloc.pickle")
+# filename = "data/block_with_geoloc.csv" # Old data
+filename = "data/NSE_release_with_latlong.csv" # New data
+
+# %% [markdown]
+# ## Reading in the data
+
+# %%
+df = pd.read_csv(filename)
 num_blocks = len(df)
+longlat = list(zip(df["long"], df["lat"]))
+# Converting it to geopandas
+geometry = [Point(xy) for xy in longlat]
+crs = {"init": "epsg:4326"}
+gdf = gpd.GeoDataFrame(df, crs=crs, geometry=geometry).to_crs(epsg=3414)
 
-# %%
-df["Lat"] = df["location"].str.split(",").apply(lambda x: float(x[0]))
-df["Lon"] = df["location"].str.split(",").apply(lambda x: float(x[1]))
-latlong = list(zip(df["Lon"], df["Lat"]))
 
 # %% [markdown]
 # # Getting the euclidean distance
@@ -40,9 +51,9 @@ latlong = list(zip(df["Lon"], df["Lat"]))
 
 # %%
 euclidean_dist = np.zeros((num_blocks, num_blocks))
-for idx, loc in enumerate(latlong):
+for idx, loc in enumerate(longlat):
     euclidean_dist[idx] = [
-        haversine((loc[1], loc[0]), (loc_[1], loc_[0])) * 1000 for loc_ in latlong
+        haversine((loc[1], loc[0]), (loc_[1], loc_[0])) * 1000 for loc_ in longlat
     ]
 euclid_matrix = euclidean_dist
 
@@ -54,19 +65,46 @@ euclidean_time_matrix = (euclidean_dist / walking_speed) * 60
 # # Getting the number of roads crossed
 
 # %%
-import geopandas as gpd
-import numpy as np
-from shapely.geometry import LineString, Point
-import folium
+buffer = 2000 # buffering by 2km of centriod
+
+# %% [markdown]
+# Getting the centriod from the points
+
+# %%
+pts = MultiPoint([row['geometry'] for _, row in gdf.iterrows()])
+near_cent = nearest_points(pts.centroid, pts)
+centriod = gdf.distance(near_cent[0]).idxmin()
 
 # %%
 # Getting the first point and converting it to local coordinate
-first_point = gpd.GeoSeries([Point(latlong[0])], crs={"init": "epsg:4326"}) \
-                 .to_crs(epsg=3414)
-area_of_interest = first_point.geometry[0].buffer(1000)  # Buffering the point by 1km
+area_of_interest = gdf.loc[centriod, 'geometry'].buffer(buffer)  # Buffering the point by buffer
 
-# loading the road network
+# loading the road network and waterbody (NOTE: THEY ARE IN LOCAL COORDINATE)
 sg_road = gpd.read_file("data/road.json")
+waterbody = gpd.read_file("data/waterbody.json")
+
+# localising to reduce the computation
+waterbody_localised = waterbody.geometry[0].intersection(area_of_interest)
+road_localised = sg_road.geometry[0].intersection(area_of_interest)
+
+# %%
+# getting all the linestrings
+lines = []
+for loc in longlat:
+    lines += [LineString([loc, x]) for x in longlat]
+lines_gpd = gpd.GeoSeries(lines, crs={"init": "epsg:4326"})
+
+# Converting to local coordinates so that buffering distance is more intuitive
+sg_lines_gpd = lines_gpd.copy()
+sg_lines_gpd = sg_lines_gpd.to_crs(epsg=3414)
+
+# %% [markdown]
+# Getting The number of water body crossed
+
+# %%
+num_water = sg_lines_gpd.intersection(waterbody_localised)
+counts_num_water = num_water.apply(lambda x: 1 if x.type == "LineString" else len(x))
+water_crossed = counts_num_water.to_numpy().reshape(num_blocks, num_blocks)
 
 # %% [markdown]
 # ## Method 1:
@@ -75,20 +113,7 @@ sg_road = gpd.read_file("data/road.json")
 # Problems: diagonal crossing counted as one road crossing
 
 # %%
-# getting all the linestrings
-lines = []
-for loc in latlong:
-    lines += [LineString([loc, x]) for x in latlong]
-lines_gpd = gpd.GeoSeries(lines, crs={"init": "epsg:4326"})
-
-# Converting to local coordinates so that buffering distance is more intuitive
-sg_lines_gpd = lines_gpd.copy()
-sg_lines_gpd = sg_lines_gpd.to_crs(epsg=3414)
-
-# localisation of the road network to speed up the intersection findings
-road_localised = sg_road.geometry[0].intersection(area_of_interest)
-
-num_roads = lines_gpd.intersection(road_localised)
+num_roads = sg_lines_gpd.intersection(road_localised)
 counts_num_roads = num_roads.apply(lambda x: 1 if x.type == "LineString" else len(x))
 road_crossed = counts_num_roads.to_numpy().reshape(num_blocks, num_blocks)
 # %% [markdown]
@@ -101,8 +126,7 @@ road_crossed = counts_num_roads.to_numpy().reshape(num_blocks, num_blocks)
 
 # %%
 area_cc = (
-    sg_lines_gpd.geometry[0]
-    .buffer(1000)
+    area_of_interest
     .difference(sg_road.geometry[0])
 )  # buffering to merge the polygons together
 
@@ -116,9 +140,6 @@ land_mass = gpd.GeoDataFrame(
     crs={"init": "epsg:3414", "no_defs": True},
     geometry=list(area_cc),
 )
-geometry = [Point(xy) for xy in zip(df.Lon, df.Lat)]
-crs = {"init": "epsg:4326"}
-gdf = gpd.GeoDataFrame(df, crs=crs, geometry=geometry).to_crs(epsg=3414)
 gdf = gpd.sjoin(gdf, land_mass, how="left", op="within")
 
 # %%
@@ -196,7 +217,9 @@ display(mapa)
 
 # %%
 # Time penalty for road crossing
-penalty_road = 200
+penalty_road = 500
+penalty_water = 1000
+depot = centriod
 # penalty_lift =
 # penalty_release_pts =
 
@@ -217,21 +240,11 @@ def add_release_penalty(time_matrix, penalty=600, method="fixed"):
 
 # %%
 elucid_matrix = euclidean_dist
-time_matrix_10min = (
-    add_release_penalty(euclidean_time_matrix, penalty=600)
-    + road_crossed * penalty_road
+time_matrix = (
+    add_release_penalty(euclidean_time_matrix, penalty=240)
+    + road_crossed * penalty_road + water_crossed * penalty_water
 )
-time_matrix_5min = (
-    add_release_penalty(euclidean_time_matrix, penalty=300)
-    + road_crossed * penalty_road
-)
-time_matrix_8min = (
-    add_release_penalty(euclidean_time_matrix, penalty=480)
-    + road_crossed * penalty_road
-)
-time_matrix_5min[37, :] = 0  # Setting going out time to zero
-time_matrix_10min[37, :] = 0  # Setting going out time to zero
-time_matrix_10min[37, :] = 0  # Setting going out time to zero
+dist_matrix = euclidean_dist
 
 # %%
 """Vehicles Routing Problem (VRP)."""
@@ -301,7 +314,7 @@ def print_solution(full_route):
 # For 5min in each building
 
 # %%
-current_time_matrix = time_matrix_5min
+current_time_matrix = time_matrix
 current_distance_matrix = euclidean_dist
 
 # %%
@@ -311,7 +324,7 @@ current_distance_matrix = euclidean_dist
 data = {}
 data["distance_matrix"] = current_time_matrix
 data["num_vehicles"] = 6
-data["depot"] = 37
+data["depot"] = depot
 
 # Create the routing index manager.
 
@@ -418,16 +431,15 @@ def set_up_map(data, df, routing, manager, color=color):
         loc = []
         index = routing.Start(vehicle_id)
         route_distance = 0
-        if df.loc[manager.IndexToNode(index), "location"]:
-            tmp = df.loc[manager.IndexToNode(index), "location"].split(",")
-            loc.append((float(tmp[0]), float(tmp[1])))
+        if not np.isnan(df.loc[manager.IndexToNode(index), "lat"]):
+            loc.append((float(df.loc[manager.IndexToNode(index), "lat"]), float(df.loc[manager.IndexToNode(index), "long"])))
         while not routing.IsEnd(index):
             previous_index = index
             index = solution.Value(routing.NextVar(index))
-            if df.loc[manager.IndexToNode(index), "location"]:
-                tmp = df.loc[manager.IndexToNode(index), "location"].split(",")
-                loc.append((float(tmp[0]), float(tmp[1])))
+            if not np.isnan(df.loc[manager.IndexToNode(index), "lat"]):
+                loc.append((float(df.loc[manager.IndexToNode(index), "lat"]), float(df.loc[manager.IndexToNode(index), "long"])))
         folium.Marker(loc[1], popup=str(index)).add_to(mapa)
+#         print(loc)
         folium.PolyLine(loc[1:], color=color[vehicle_id], weight=2.5, opacity=1).add_to(
             mapa
         )
@@ -439,52 +451,16 @@ mapa = set_up_map(data, df, routing, manager)
 mapa
 
 # %% [markdown]
-# Sovling it for 10 min interval
-
-# %%
-current_time_matrix = time_matrix_10min
-current_distance_matrix = euclidean_dist
-
-# %%
-"""Solve the CVRP problem."""
-# Instantiate the data problem.
-"""Stores the data for the problem."""
-data = {}
-data["distance_matrix"] = current_time_matrix
-data["num_vehicles"] = 6
-data["depot"] = 37
-
-# Create the routing index manager.
-solution, manager, routing = vrp_solver(data)
-
-# Print solution on console.
-if solution:
-    full_route = generate_readable_solution(
-        data,
-        manager,
-        routing,
-        solution,
-        df=df,
-        time_matrix=current_time_matrix,
-        dist_matrix=current_distance_matrix,
-        euclid_matrix=euclidean_dist,
-    )
-    print_solution(full_route)
-
-# %%
-import folium
-
-mapa = set_up_map(data, df, routing, manager)
-display(mapa)
-
-# %% [markdown]
 # # Arbitrary start and end point
+
+# %%
+penalty_water = 1000
 
 # %%
 current_time_matrix = np.zeros((num_blocks + 1, num_blocks + 1))
 current_time_matrix[:num_blocks, :num_blocks] = (
     add_release_penalty(euclidean_time_matrix, penalty=300)
-    + road_crossed * penalty_road
+    + road_crossed * penalty_road + water_crossed * penalty_water
 )
 current_distance_matrix = np.zeros((num_blocks + 1, num_blocks + 1))
 current_distance_matrix[:num_blocks, :num_blocks] = euclidean_dist
@@ -492,7 +468,7 @@ current_euclid_matrix = np.zeros((num_blocks + 1, num_blocks + 1))
 current_euclid_matrix[:num_blocks, :num_blocks] = euclidean_dist
 df_append = df.copy()
 df_append = df_append.append(
-    {"Block": "Dummy", "Road": None, "location": None}, ignore_index=True
+    {"Block": "Dummy", "lat": None, "long": None}, ignore_index=True
 )
 
 # %%
@@ -501,7 +477,7 @@ df_append = df_append.append(
 """Stores the data for the problem."""
 data = {}
 data["distance_matrix"] = current_time_matrix
-data["num_vehicles"] = 6
+data["num_vehicles"] = 7
 data["depot"] = num_blocks
 
 # Create the routing index manager.
