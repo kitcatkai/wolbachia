@@ -37,12 +37,12 @@ release_pts["long"] = ""
 
 
 # %%
-url = "https://developers.onemap.sg/commonapi/search"
+ONEMAP_SEARCH_URL = "https://developers.onemap.sg/commonapi/search"
 
 
 def get_latlon_frm_postal(postal):
     m = {"searchVal": postal, "returnGeom": "Y", "getAddrDetails": "Y"}
-    response = requests.request("GET", url, params=m)
+    response = requests.request("GET", ONEMAP_SEARCH_URL, params=m)
     if response.status_code == HTTPStatus.OK:
         if response.json()["totalNumPages"] == 0:
             print("No result found for postal code {}!".format(postal))
@@ -54,7 +54,7 @@ def get_latlon_frm_postal(postal):
         # Cannot find match
         while response.json()["totalNumPages"] > response.json()["pageNum"]:
             m["pageNum"] = response.json()["pageNum"] + 1
-            response = requests.request("GET", url, params=m)
+            response = requests.request("GET", ONEMAP_SEARCH_URL, params=m)
             results = response.json()["results"]
             for result in results:
                 if result["POSTAL"] == str(postal):
