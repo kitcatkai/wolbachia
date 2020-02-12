@@ -1,11 +1,12 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
 #     text_representation:
 #       extension: .py
 #       format_name: percent
-#       format_version: '1.2'
-#       jupytext_version: 1.2.3
+#       format_version: '1.3'
+#       jupytext_version: 1.3.3
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -98,13 +99,42 @@ lines_gpd = gpd.GeoSeries(lines, crs={"init": "epsg:4326"})
 sg_lines_gpd = lines_gpd.copy()
 sg_lines_gpd = sg_lines_gpd.to_crs(epsg=3414)
 
+
 # %% [markdown]
 # Getting The number of water body crossed
 
 # %%
-num_water = sg_lines_gpd.intersection(waterbody_localised)
-counts_num_water = num_water.apply(lambda x: 1 if x.type == "LineString" else len(x))
+def count_line(x):
+    if x.type == "LineString":
+        if x.is_empty:
+            return 0
+        else:
+            return 1
+    else:
+        return len(x)
+num_water = sg_lines_gpd.intersection(waterbody_localised.buffer(30).buffer(-30))
+counts_num_water = num_water.apply(count_line)
 water_crossed = counts_num_water.to_numpy().reshape(num_blocks, num_blocks)
+
+
+# %%
+def map_shapely_objects(*args):
+    mapa = folium.Map([1.43296,103.8386047], zoom_start=16, tiles="cartodbpositron")
+    mp_road = folium.FeatureGroup(name="mp road")
+    mp_road.add_child(
+        folium.GeoJson(
+            gpd.GeoSeries(args, crs={"init": "epsg:3414"}).to_crs(epsg=4326).to_json()
+        )
+    )
+    mapa.add_child(mp_road)
+    display(mapa)
+
+
+# %%
+map_shapely_objects(sg_lines_gpd[386], waterbody_localised.buffer(30).buffer(-30))
+
+# %%
+counts_num_water.idxmax()
 
 # %% [markdown]
 # ## Method 1:
@@ -114,8 +144,11 @@ water_crossed = counts_num_water.to_numpy().reshape(num_blocks, num_blocks)
 
 # %%
 num_roads = sg_lines_gpd.intersection(road_localised)
-counts_num_roads = num_roads.apply(lambda x: 1 if x.type == "LineString" else len(x))
-road_crossed = counts_num_roads.to_numpy().reshape(num_blocks, num_blocks)
+counts_num_roads = num_roads.apply(count_line)
+road_crossed_lines = counts_num_roads.to_numpy().reshape(num_blocks, num_blocks)
+# %%
+counts_num_roads.idxmax()
+
 # %% [markdown]
 # ## Method 2:
 # Getting the connected components and filter distance for those under 60m. Diagonal component filtered out based on area of overlap after buffering.
@@ -189,13 +222,13 @@ def num_road_crossed(adj_mat):
 
 
 # %%
-road_crossed = np.zeros((num_blocks, num_blocks))
+road_crossed_region = np.zeros((num_blocks, num_blocks))
 cluster_road = num_road_crossed(adj_mat)
 house_to_cluster = list(gdf["cluster"])
 for idx, cluster in enumerate(house_to_cluster):
     for idx_ in range(idx + 1, num_blocks):
-        road_crossed[idx, idx_] = cluster_road[(cluster, house_to_cluster[idx_])]
-        road_crossed[idx_, idx] = cluster_road[(cluster, house_to_cluster[idx_])]
+        road_crossed_region[idx, idx_] = cluster_road[(cluster, house_to_cluster[idx_])]
+        road_crossed_region[idx_, idx] = cluster_road[(cluster, house_to_cluster[idx_])]
 
 # %%
 # Viewing the regions
@@ -210,6 +243,13 @@ mapa.add_child(mp_road)
 display(mapa)
 
 # %% [markdown]
+# ## Method 3
+# - Taking the max of both in case of weird shaped polygon
+
+# %%
+road_crossed = np.maximum(road_crossed_lines, road_crossed_region)
+
+# %% [markdown]
 # ## Generating the time/distance matrix
 # Adding in penalty for road crossing. 
 #
@@ -217,8 +257,8 @@ display(mapa)
 
 # %%
 # Time penalty for road crossing
-penalty_road = 500
-penalty_water = 1000
+penalty_road = 300
+penalty_water = 500
 depot = centriod
 # penalty_lift =
 # penalty_release_pts =
@@ -243,7 +283,7 @@ elucid_matrix = euclidean_dist
 time_matrix = (
     add_release_penalty(euclidean_time_matrix, penalty=240)
     + road_crossed * penalty_road + water_crossed * penalty_water
-)
+)/10
 dist_matrix = euclidean_dist
 
 # %%
@@ -373,12 +413,12 @@ def vrp_solver(data):
     search_parameters.first_solution_strategy = (
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     )
-    #     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    #     search_parameters.local_search_metaheuristic = (
-    #         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    #     )
-    #     search_parameters.time_limit.seconds = 30euclid_matrix
-    #     search_parameters.log_search = True
+#     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+#     search_parameters.local_search_metaheuristic = (
+#         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+#     )
+#     search_parameters.time_limit.seconds = 120
+#     search_parameters.log_search = True
 
     # Solve the problem.
     solution = routing.SolveWithParameters(search_parameters)
@@ -400,6 +440,16 @@ if solution:
         euclid_matrix=euclidean_dist,
     )
     print_solution(full_route)
+
+# %%
+import unicodedata, string
+# all_letters = string.ascii_letters + " .,;'
+
+nfkd_form = unicodedata.normalize('NFKD', "“")
+only_ascii = nfkd_form.encode('ASCII', 'ignore')
+
+# %%
+only_ascii
 
 # %%
 import folium
