@@ -3,8 +3,8 @@
 #   jupytext:
 #     text_representation:
 #       extension: .py
-#       format_name: light
-#       format_version: '1.4'
+#       format_name: percent
+#       format_version: '1.2'
 #       jupytext_version: 1.2.3
 #   kernelspec:
 #     display_name: Python 3
@@ -12,12 +12,13 @@
 #     name: python3
 # ---
 
+# %% [markdown]
 # # Note
 # This code produce the dataframe with the lat, lon of buildings, walking distance and time matrix.
 #
 # Should only be run once and the output is saved to reduce call to Google api.
 
-# +
+# %%
 import pandas as pd
 import json
 import requests
@@ -27,56 +28,66 @@ from haversine import haversine
 
 with open("config.json") as f:
     settings = json.load(f)
-# -
 
+# %%
+filename = "Yishun Wolbachia Release Points.xlsx"
+outfile = "data/block_with_geoloc.csv"
+
+# %% [markdown]
 # # Getting the Geolocation
 
+# %%
 # Reading in the release data
-release_pts = pd.read_excel("Yishun Wolbachia Release Points.xlsx")
+release_pts = pd.read_excel(filename)
 release_pts["NumRelease"] = release_pts["ReleaseLocation"].str.split(",").apply(len)
 release_pts["Block"] = release_pts["Block"].astype("str")
 release_pts["Block"] = release_pts["Block"].str.replace(".Bin Centre", "")
 display(release_pts)
 
 
+# %% [markdown]
 # Adding the number of release points to the df.
 
+# %%
 def count_release(df_input):
     """ Getting the number of release points at each block
     """
-    output = {"Road": df_input.iloc[0, 0], "NumRelease": df_input["NumRelease"].sum()}
+    output = {"Road": df_input.iloc[0, 0], 
+              "NumRelease": df_input["NumRelease"].sum()}
     return pd.Series(output)
 
 
+# %%
 df = release_pts.groupby("Block").apply(count_release).reset_index()
 df["address"] = df["Block"] + "+" + df["Road"].str.replace(" ", "+")
-df["location"] = None
+df["lat"] = 0
+df["long"] = 0
 display(df)
 
-# +
+# %%
+len(df)
+
+# %%
 url = "https://maps.googleapis.com/maps/api/geocode/json"
 
-for each in range(num_blonum_blocks):
-    if not df.loc[each, "location"]:
+for each in range(len(df)):
+    if not df.loc[each, "lat"]:
         params = dict(address=df.loc[each, "address"], key=settings["api_key"])
         resp = requests.get(url=url, params=params)
         data = resp.json()
         try:
-            df.loc[each, "location"] = (
-                str(data["results"][0]["geometry"]["location"]["lat"])
-                + ","
-                + str(data["results"][0]["geometry"]["location"]["lng"])
-            )
+            df.loc[each, "lat"] = data["results"][0]["geometry"]["location"]["lat"]
+            df.loc[each, "long"] = data["results"][0]["geometry"]["location"]["lng"]
         except:
             print(each)
             print(data)
 
-df.to_pickle("data/block_with_geoloc.pickle")
-# -
+df.to_csv(outfile, index=False)
 
+# %% [markdown]
 # # Getting the walking distance and time 
 
-# +
+# %%
 # splitting the addresses into multiple string due to api limit
 
 arr = ""
@@ -93,7 +104,7 @@ if count != 0:
     arr_total.append(arr)
 arr_total
 
-# +
+# %%
 # WILL RUN FOR 2 MINS AT MAX
 
 num_blocks = len(df)
@@ -133,8 +144,8 @@ for each_index in range(len(df)):
     print(each_index)
     time_matrix[each_index] = time_array
     dist_matrix[each_index] = dist_array
-# -
 
 
+# %%
 np.save("data/time_matrix.npy", time_matrix)
 np.save("data/dist_matrix.npy", dist_matrix)
