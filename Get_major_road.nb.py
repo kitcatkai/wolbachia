@@ -13,9 +13,9 @@
 # ---
 
 # %%
-import folium
 import geopandas as gpd
 from shapely.geometry import LineString
+from utils import map_shapely_objects
 
 # %% [markdown]
 # ## Reading in Master Plan Land use
@@ -60,17 +60,7 @@ tmp.to_file("data/road.json", driver="GeoJSON")
 # Visualising a subset of it!
 
 # %%
-sg_roads_geojson = (
-    gpd.GeoSeries([sg_roads[:500].buffer(0).unary_union], crs={"init": "epsg:3414"})
-    .to_crs(epsg=4326)
-    .to_json()
-)
-mapa = folium.Map([1.3, 103.9], zoom_start=10, tiles="cartodbpositron")
-
-mp_road = folium.FeatureGroup(name="mp road")
-mp_road.add_child(folium.GeoJson(sg_roads_geojson))
-mapa.add_child(mp_road)
-mapa
+map_shapely_objects(*[sg_roads[:100].buffer(0).unary_union], center=(1.294138, 103.630232), zoom_start=14)
 
 # %% [markdown]
 # ## Reading in the road
@@ -82,29 +72,16 @@ road = gpd.read_file("data/road.json")
 # ## Testing the number of roads crossed
 
 # %%
+line = LineString([(103.8378901, 1.4307489), (103.8072645, 1.4307641)])
 tmp2 = gpd.GeoSeries(
-    [LineString([(103.8378901, 1.4307489), (103.8072645, 1.4307641)])],
+    [line],
     crs={"init": "epsg:4326"},
 ).to_crs(epsg=3414)
 area_of_interest = road.intersection(tmp2.buffer(1000))
 
-area_of_interest_gj = area_of_interest.to_crs(epsg=4326).to_json()
+area_of_interest_gj = area_of_interest.to_crs(epsg=4326)
 
 tmp2.intersection(road).apply(len)
 
 # %%
-mapa = folium.Map([1.3, 103.9], zoom_start=10, tiles="cartodbpositron")
-
-osm_carpark = folium.FeatureGroup(name="OSM carpark")
-osm_carpark.add_child(
-    folium.GeoJson(
-        gpd.GeoSeries(
-            [LineString([(103.8378901, 1.4307489), (103.8072645, 1.4307641)])]
-        ).to_json()
-    )
-)
-mapa.add_child(osm_carpark)
-mp_road = folium.FeatureGroup(name="mp road")
-mp_road.add_child(folium.GeoJson(area_of_interest_gj))
-mapa.add_child(mp_road)
-mapa
+map_shapely_objects(line, area_of_interest_gj[0], epsg=4326)
